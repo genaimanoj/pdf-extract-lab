@@ -1,0 +1,15 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+pydantic>=2.9.0
+pydantic-settings>=2.5.0
+pdfplumber>=0.11.0
+PyMuPDF>=1.24.0
+docling>=2.0.0,<3.0.0
+opendataloader-pdf>=2.0.0
+claude-agent-sdk>=0.1.0
+anthropic>=0.40.0
+pillow>=10.0.0
+aiofiles>=24.0.0
+litellm>=1.80.0
+opendataloader-pdf[hybrid]>=2.0.0
