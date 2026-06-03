@@ -1,6 +1,6 @@
 # PDF Extractor Lab
 
-> A visual harness for comparing open-source PDF extractors. Same PDF, seven engines, every detected block painted back onto the page.
+> A visual harness for comparing open-source PDF extractors. Same PDF, eight engines, every detected block painted back onto the page.
 
 <p>
   <img alt="Python"  src="https://img.shields.io/badge/python-%E2%89%A53.10-3776AB?logo=python&logoColor=white">
@@ -25,13 +25,14 @@ Vendor benchmarks don't answer the questions that matter — speed, segmentation
 |-------------------------|------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------|---------------------|
 | `basic`                 | [`basic_extractor.py`](backend/app/extractors/basic_extractor.py)                                          | [pdfplumber](https://github.com/jsvine/pdfplumber)                                | MIT                 |
 | `pymupdf`               | [`pymupdf_extractor.py`](backend/app/extractors/pymupdf_extractor.py)                                      | [PyMuPDF](https://pymupdf.readthedocs.io/)                                        | AGPL-3.0            |
+| `liteparse`             | [`liteparse_extractor.py`](backend/app/extractors/liteparse_extractor.py)                                  | [LiteParse](https://github.com/run-llama/liteparse) — the local LlamaParse core   | Apache-2.0          |
 | `docling`               | [`docling_extractor.py`](backend/app/extractors/docling_extractor.py)                                      | [Docling](https://github.com/docling-project/docling) — DocLayNet + TableFormer   | MIT                 |
 | `opendataloader`        | [`opendataloader_extractor.py`](backend/app/extractors/opendataloader_extractor.py)                        | [OpenDataLoader PDF](https://github.com/opendataloader-project/opendataloader-pdf)| Apache-2.0          |
 | `opendataloader_hybrid` | [`opendataloader_hybrid_extractor.py`](backend/app/extractors/opendataloader_hybrid_extractor.py)          | ODL Java core + Docling-Fast AI                                                   | Apache-2.0          |
 | `vlm`                   | [`vlm_extractor.py`](backend/app/extractors/vlm_extractor.py)                                              | [LiteLLM](https://github.com/BerriAI/litellm) + vision LM                         | depends on provider |
 | `agentic`               | [`agentic_extractor.py`](backend/app/extractors/agentic_extractor.py)                                      | [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python)         | depends on provider |
 
-All seven emit the same `ExtractionResult` schema. `GET /engines` returns live availability per engine; the UI greys out anything whose required env vars or binaries are missing. The file → engine mapping is also documented at the top of [`backend/app/extractors/__init__.py`](backend/app/extractors/__init__.py).
+All eight emit the same `ExtractionResult` schema. `GET /engines` returns live availability per engine; the UI greys out anything whose required env vars or binaries are missing. The file → engine mapping is also documented at the top of [`backend/app/extractors/__init__.py`](backend/app/extractors/__init__.py).
 
 ## In practice
 
@@ -41,6 +42,7 @@ Each engine has a different opinion on the same page. Use this as a quick map �
 |-------------------------|----------------------------------------------------------|--------------------------------------------------------------|
 | `pymupdf`               | Speed — direct text-dict walk, no model loading          | No table support                                             |
 | `basic`                 | Simple, transparent pdfplumber baseline                  | Conservative heading detection                               |
+| `liteparse`             | Fast, fully local; OCR fallback for scanned pages        | Positioned text only — no tables or figures                  |
 | `opendataloader`        | Deterministic rule-based; clean heading levels           | Pure text-layer parser — won't read scanned content          |
 | `docling`               | Tables (TableFormer) and reading order                   | Per-line paragraphs; first run downloads ~500 MB of models   |
 | `opendataloader_hybrid` | ODL structure + Docling-Fast table pass                  | Auto-spawns its backend on first call (initial latency)      |
@@ -138,6 +140,7 @@ pdf-extract-lab/
 Thin harness around brilliant work by others:
 [pdfplumber](https://github.com/jsvine/pdfplumber),
 [PyMuPDF](https://pymupdf.readthedocs.io/),
+[LiteParse](https://github.com/run-llama/liteparse),
 [Docling](https://github.com/docling-project/docling),
 [OpenDataLoader PDF](https://github.com/opendataloader-project/opendataloader-pdf),
 [LiteLLM](https://github.com/BerriAI/litellm), and the
