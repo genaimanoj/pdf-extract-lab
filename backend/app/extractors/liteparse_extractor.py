@@ -68,7 +68,7 @@ class LiteParseExtractor:
 
         # parse() is synchronous, CPU-bound native code — keep it off the event
         # loop so concurrent requests aren't blocked while a PDF is parsed.
-        result = await asyncio.to_thread(self._parse, pdf_path)
+        result, note = await asyncio.to_thread(self._parse, pdf_path)
 
         lines: List[Dict[str, Any]] = []
         for page in result.pages:
@@ -76,9 +76,8 @@ class LiteParseExtractor:
 
         # Body size = the most common rounded line size. The mode is far steadier
         # than a mean/median when most lines share one size with float jitter.
-        sized = [ln for ln in lines if ln["size"] >= _TEXT_SIZE_FLOOR]
-        if sized:
-            body_size = Counter(round(ln["size"], 1) for ln in sized).most_common(1)[0][0]
+        if lines:
+            body_size = Counter(round(ln["size"], 1) for ln in lines).most_common(1)[0][0]
         else:
             body_size = 10.0
 
@@ -89,10 +88,15 @@ class LiteParseExtractor:
             (b.get("bbox") or [0, 0, 0, 0])[0],
         ))
 
+        # Prefer the embedded title; otherwise fall back to the first real
+        # heading on page 1. Require two-plus words so a stray marginal glyph
+        # (rotated banners love the left edge) can't masquerade as the title.
         title = meta.get("title")
         if not title:
             for b in blocks:
-                if b.get("type") == "heading" and b.get("level") == 1:
+                if b.get("page") != 1 or b.get("type") != "heading":
+                    continue
+                if len((b.get("text") or "").split()) >= 2:
                     title = b.get("text")
                     break
 
@@ -107,6 +111,7 @@ class LiteParseExtractor:
             pages=[PageMeta(**pg) for pg in pages_geom],
             blocks=blocks,
             markdown=md,
+            notes=note,
             metrics=ExtractionMetrics(
                 duration_ms=duration_ms,
                 block_count=len(blocks),
@@ -115,11 +120,35 @@ class LiteParseExtractor:
         )
 
     def _parse(self, pdf_path: str):
-        """Run LiteParse with the configured OCR / DPI options."""
+        """Parse with LiteParse, degrading gracefully if OCR can't start.
+
+        OCR is a fallback LiteParse only reaches for on pages with no text
+        layer, and it depends on a working Tesseract install (engine + language
+        data). When that isn't present a scanned page would otherwise 500 the
+        whole request, so we retry once with OCR off and return the text layer
+        plus a note. Returns (result, note) where note is None on the happy path.
+        """
+        from liteparse import ParseError
+
+        if not settings.liteparse_ocr_enabled:
+            return self._run(pdf_path, ocr=False), None
+        try:
+            return self._run(pdf_path, ocr=True), None
+        except ParseError as exc:
+            if "ocr" not in str(exc).lower():
+                raise
+            note = (
+                "OCR was unavailable (Tesseract failed to initialize), so only "
+                "the embedded text layer was parsed — pages that are pure image "
+                "may come back empty. Install Tesseract language data to enable OCR."
+            )
+            return self._run(pdf_path, ocr=False), note
+
+    def _run(self, pdf_path: str, *, ocr: bool):
         from liteparse import LiteParse
 
         parser = LiteParse(
-            ocr_enabled=settings.liteparse_ocr_enabled,
+            ocr_enabled=ocr,
             ocr_language=settings.liteparse_ocr_language,
             dpi=float(settings.liteparse_dpi),
             quiet=True,
@@ -133,8 +162,17 @@ class LiteParseExtractor:
         merge each item into the current line when their vertical centers are
         within half a line height. That tolerance absorbs the baseline jitter
         within a line without bridging the gap to the next one.
+
+        Sub-point items are dropped first: PDFium hands back figure-internal
+        micro-text (axis labels, tick numbers) at font sizes like 1pt, and left
+        in place they both skew the body-size estimate and bleed into adjacent
+        real lines during clustering.
         """
-        items = [it for it in page.text_items if it.text and it.text.strip()]
+        items = [
+            it for it in page.text_items
+            if it.text and it.text.strip()
+            and (it.font_size or it.height) >= _TEXT_SIZE_FLOOR
+        ]
         if not items:
             return []
 
@@ -151,23 +189,40 @@ class LiteParseExtractor:
         lines: List[Dict[str, Any]] = []
         for row in rows:
             row.sort(key=lambda i: i.x)
-            text = " ".join(i.text.strip() for i in row).strip()
-            if not text:
-                continue
-            # font_size is absent for OCR'd glyphs; box height is a fair proxy.
-            size = max((i.font_size or i.height) for i in row)
-            lines.append({
-                "page": page.page_num,
-                "text": text,
-                "size": float(size),
-                "bbox": [
-                    min(i.x for i in row),
-                    min(i.y for i in row),
-                    max(i.x + i.width for i in row),
-                    max(i.y + i.height for i in row),
-                ],
-            })
-        return lines
+            # Split the row wherever a wide horizontal gap opens up — a column
+            # gutter or the gap between a marginal note and the body. Clustering
+            # on y alone would otherwise glue a left-margin glyph onto the line
+            # that happens to share its baseline.
+            segment: List[Any] = [row[0]]
+            for prev, it in zip(row, row[1:]):
+                gap = it.x - (prev.x + prev.width)
+                if gap > max(18.0, it.height * 1.5):
+                    lines.append(self._line(segment, page.page_num))
+                    segment = [it]
+                else:
+                    segment.append(it)
+            lines.append(self._line(segment, page.page_num))
+        return [ln for ln in lines if ln]
+
+    @staticmethod
+    def _line(items: List[Any], page_num: int) -> Dict[str, Any] | None:
+        """Fold one horizontal run of items into a single line dict."""
+        text = " ".join(i.text.strip() for i in items).strip()
+        if not text:
+            return None
+        # font_size is absent for OCR'd glyphs; box height is a fair proxy.
+        size = max((i.font_size or i.height) for i in items)
+        return {
+            "page": page_num,
+            "text": text,
+            "size": float(size),
+            "bbox": [
+                min(i.x for i in items),
+                min(i.y for i in items),
+                max(i.x + i.width for i in items),
+                max(i.y + i.height for i in items),
+            ],
+        }
 
     def _build_blocks(self, lines: List[Dict[str, Any]], body_size: float) -> List[Dict[str, Any]]:
         """Fold a flat line list into heading and paragraph blocks."""
@@ -197,7 +252,11 @@ class LiteParseExtractor:
         for ln in lines:
             ratio = ln["size"] / max(body_size, 1.0)
             level = _heading_level(ratio)
-            if level is not None and len(ln["text"].split()) <= _HEADING_MAX_WORDS:
+            # A heading is large, short, and at least two characters — single
+            # glyphs at heading size are almost always rotated-banner fragments.
+            if (level is not None
+                    and len(ln["text"]) >= 2
+                    and len(ln["text"].split()) <= _HEADING_MAX_WORDS):
                 flush()
                 blocks.append({
                     "id": f"lp_{uuid.uuid4().hex[:8]}",
