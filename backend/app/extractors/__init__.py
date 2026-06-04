@@ -105,7 +105,7 @@ _ENGINES: List[Dict[str, Any]] = [
         "descriptor": ExtractorDescriptor(
             name="liteparse",
             label="LiteParse (LlamaIndex)",
-            description="Local PDFium text + bundled Tesseract OCR (the LlamaParse core). Fast spatial text with boxes; no tables.",
+            description="Local PDFium text + Tesseract OCR (the LlamaParse core). Font-aware headings; the Markdown view is LiteParse's own layout-preserved text, so tables survive as aligned text.",
             license="Apache-2.0",
             homepage="https://github.com/run-llama/liteparse",
         ),

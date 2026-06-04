@@ -42,7 +42,7 @@ Each engine has a different opinion on the same page. Use this as a quick map �
 |-------------------------|----------------------------------------------------------|--------------------------------------------------------------|
 | `pymupdf`               | Speed — direct text-dict walk, no model loading          | No table support                                             |
 | `basic`                 | Simple, transparent pdfplumber baseline                  | Conservative heading detection                               |
-| `liteparse`             | Fast, fully local; OCR fallback for scanned pages        | Positioned text only — no tables or figures                  |
+| `liteparse`             | Fast, fully local; layout-preserved Markdown (tables stay readable as aligned text) | Tables/figures aren't structured blocks — only text          |
 | `opendataloader`        | Deterministic rule-based; clean heading levels           | Pure text-layer parser — won't read scanned content          |
 | `docling`               | Tables (TableFormer) and reading order                   | Per-line paragraphs; first run downloads ~500 MB of models   |
 | `opendataloader_hybrid` | ODL structure + Docling-Fast table pass                  | Auto-spawns its backend on first call (initial latency)      |
