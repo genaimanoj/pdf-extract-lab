@@ -6,15 +6,22 @@ Rust bindings. For each page it returns flat *text items* — a string plus an
 (x, y, width, height) box and font size — which is exactly the primitive this
 lab needs to paint blocks back onto the page.
 
-This engine turns those items into structure the same way the `pymupdf` engine
-does: group items into lines, take the document's dominant font size as the
-body baseline, and promote larger lines to headings by font-size ratio. Keeping
-the heuristic identical means headings stay comparable across the two
-text-layer engines.
+For the structured **blocks** (what paints onto the page) this engine groups
+items into lines, takes the document's dominant font size as the body baseline,
+and promotes lines to headings using both font size *and* font weight — the
+`font_name` field catches bold/medium headings the size test alone would miss.
+OCR confidence rides along onto blocks whenever LiteParse reports it.
 
-Scope: LiteParse emits positioned text only — no table or figure model — so
-this engine deliberately produces just headings and paragraphs. Use `docling`
-or the ODL engines when table structure matters.
+The Markdown view is fed from LiteParse's own grid-projected `result.text`
+rather than re-rendered from our blocks. That layout-preserved text is the
+library's signature output: multi-column flow and even table cells survive as
+aligned monospace text, so the Markdown tab shows what LiteParse can actually
+do — not a lossy reconstruction.
+
+Scope: LiteParse has no table or figure *object* in its data model, so the
+structured blocks are headings and paragraphs only (table content still shows
+in the Markdown view as aligned text). Reach for `docling` or the ODL engines
+when you need tables and figures as structured data.
 
 Coordinate note: LiteParse reports boxes top-left-origin in PDF points, which
 matches the schema's convention, so `(x, y, w, h)` maps straight to
@@ -39,6 +46,37 @@ _TEXT_SIZE_FLOOR = 5.0
 
 # A heading line is large *and* short. Anything longer is a styled paragraph.
 _HEADING_MAX_WORDS = 20
+
+# Substrings that mark a bold / medium PostScript font name (e.g. "Times-Bold",
+# "NimbusRomNo9L-Medi", "Helvetica-BoldOblique"). Used to catch headings set in
+# a heavier weight at (or near) body size, which the size ratio alone misses.
+_WEIGHT_MARKERS = ("bold", "black", "heavy", "semibold", "demibold", "medi", "-bd", "-bf")
+
+# An emphasized line only counts as a heading when it's this short. Real section
+# headings are terse ("3.1 PDF backends"); a bold run-in lead-in drags a sentence
+# along behind it ("Residual Representations. In image recognition, VLAD…"), so a
+# tight word cap keeps those continuations in the paragraph where they belong.
+_EMPHASIS_MAX_WORDS = 5
+
+
+def _is_weight_emphasized(font_name: str | None) -> bool:
+    if not font_name:
+        return False
+    name = font_name.lower()
+    return any(marker in name for marker in _WEIGHT_MARKERS)
+
+
+def _block_confidence(lines: List[Dict[str, Any]]) -> float | None:
+    """Lowest reported confidence across a block's lines, or None.
+
+    Text-layer items come back at 1.0, so we only surface a value when OCR
+    actually had to guess — that's the number worth showing in the output.
+    """
+    vals = [ln["confidence"] for ln in lines if ln.get("confidence") is not None]
+    if not vals:
+        return None
+    lo = min(vals)
+    return round(lo, 3) if lo < 0.999 else None
 
 
 def _heading_level(ratio: float) -> int | None:
@@ -101,7 +139,7 @@ class LiteParseExtractor:
                     break
 
         duration_ms = int((time.time() - t0) * 1000)
-        md = blocks_to_markdown(blocks, title=title)
+        md = self._native_markdown(result, blocks, title)
         counts = compute_metrics(blocks)
 
         return ExtractionResult(
@@ -118,6 +156,20 @@ class LiteParseExtractor:
                 **counts,
             ),
         )
+
+    @staticmethod
+    def _native_markdown(result, blocks: List[Dict[str, Any]], title: str | None) -> str:
+        """Render the Markdown view from LiteParse's own layout-preserved text.
+
+        `result.text` is grid-projected — columns and table cells stay aligned
+        with spaces — so it goes inside a fenced block to keep the monospacing
+        that alignment depends on. With no text layer (scanned page, OCR off)
+        there's nothing to show, so we fall back to the block-derived markdown.
+        """
+        native = (getattr(result, "text", "") or "").strip()
+        if not native:
+            return blocks_to_markdown(blocks, title=title)
+        return f"```\n{native}\n```\n"
 
     def _parse(self, pdf_path: str):
         """Parse with LiteParse, degrading gracefully if OCR can't start.
@@ -210,12 +262,25 @@ class LiteParseExtractor:
         text = " ".join(i.text.strip() for i in items).strip()
         if not text:
             return None
-        # font_size is absent for OCR'd glyphs; box height is a fair proxy.
-        size = max((i.font_size or i.height) for i in items)
+        # Size = the size most of the line's characters are set at (font_size is
+        # absent for OCR'd glyphs, so box height stands in). A plain max() would
+        # let one oversized glyph — a rotated-banner digit that merged in from
+        # the margin — masquerade the whole line as a heading.
+        sizes: Counter = Counter()
+        for i in items:
+            sizes[round(i.font_size or i.height, 1)] += max(1, len((i.text or "").strip()))
+        size = max(sizes.items(), key=lambda kv: kv[1])[0]
+        # Emphasized only when *every* item is a heavy weight. A real heading is
+        # uniformly bold; a bold run-in lead-in ("Method. We then…") is mixed,
+        # so this keeps those lead-ins out of the heading path.
+        emphasized = all(_is_weight_emphasized(i.font_name) for i in items)
+        confs = [i.confidence for i in items if i.confidence is not None]
         return {
             "page": page_num,
             "text": text,
             "size": float(size),
+            "emphasized": emphasized,
+            "confidence": min(confs) if confs else None,
             "bbox": [
                 min(i.x for i in items),
                 min(i.y for i in items),
@@ -235,7 +300,7 @@ class LiteParseExtractor:
                 return
             text = " ".join(ln["text"] for ln in para).strip()
             if text:
-                blocks.append({
+                block = {
                     "id": f"lp_{uuid.uuid4().hex[:8]}",
                     "type": "paragraph",
                     "page": para[0]["page"],
@@ -246,26 +311,42 @@ class LiteParseExtractor:
                         max(ln["bbox"][3] for ln in para),
                     ],
                     "text": text,
-                })
+                }
+                conf = _block_confidence(para)
+                if conf is not None:
+                    block["confidence"] = conf
+                blocks.append(block)
             para = []
 
         for ln in lines:
             ratio = ln["size"] / max(body_size, 1.0)
+            words = ln["text"].split()
             level = _heading_level(ratio)
-            # A heading is large, short, and at least two characters — single
-            # glyphs at heading size are almost always rotated-banner fragments.
+            # A bold/medium-weight short line at body size is a heading the size
+            # ratio alone would miss (section headings often aren't enlarged).
+            if (level is None
+                    and ratio >= 0.98
+                    and len(words) <= _EMPHASIS_MAX_WORDS
+                    and ln.get("emphasized")):
+                level = 4
+            # A heading is short and at least two characters — single glyphs at
+            # heading size are almost always rotated-banner fragments.
             if (level is not None
                     and len(ln["text"]) >= 2
-                    and len(ln["text"].split()) <= _HEADING_MAX_WORDS):
+                    and len(words) <= _HEADING_MAX_WORDS):
                 flush()
-                blocks.append({
+                block = {
                     "id": f"lp_{uuid.uuid4().hex[:8]}",
                     "type": "heading",
                     "level": level,
                     "page": ln["page"],
                     "bbox": ln["bbox"],
                     "text": ln["text"],
-                })
+                }
+                conf = _block_confidence([ln])
+                if conf is not None:
+                    block["confidence"] = conf
+                blocks.append(block)
                 continue
 
             if para:
