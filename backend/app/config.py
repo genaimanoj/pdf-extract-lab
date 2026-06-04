@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     odl_use_struct_tree: bool = False      # use tagged-PDF structure tree
     odl_keep_line_breaks: bool = False     # preserve original line breaks
 
+    # LiteParse (LlamaIndex) — local PDFium text + bundled Tesseract OCR.
+    # OCR only kicks in on pages with no extractable text layer; leaving it on
+    # lets the engine handle scanned PDFs at the cost of some latency.
+    liteparse_ocr_enabled: bool = True
+    liteparse_ocr_language: str = "eng"    # Tesseract language code(s), e.g. "eng+fra"
+    liteparse_dpi: int = 150               # render DPI used when a page falls back to OCR
+
     model_config = SettingsConfigDict(env_file=_ENV_PATH, env_file_encoding="utf-8", extra="ignore")
 
     @field_validator("max_upload_mb")

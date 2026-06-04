@@ -4,6 +4,7 @@ Each engine lives in its own file in this directory. The mapping is 1:1:
 
     basic                    → basic_extractor.py
     pymupdf                  → pymupdf_extractor.py
+    liteparse                → liteparse_extractor.py
     docling                  → docling_extractor.py
     opendataloader           → opendataloader_extractor.py
     opendataloader_hybrid    → opendataloader_hybrid_extractor.py
@@ -44,6 +45,11 @@ def _load_basic():
 def _load_pymupdf():
     from .pymupdf_extractor import PyMuPDFExtractor
     return PyMuPDFExtractor
+
+
+def _load_liteparse():
+    from .liteparse_extractor import LiteParseExtractor
+    return LiteParseExtractor
 
 
 def _load_docling():
@@ -94,6 +100,16 @@ _ENGINES: List[Dict[str, Any]] = [
             homepage="https://pymupdf.readthedocs.io/",
         ),
         "loader": _load_pymupdf,
+    },
+    {
+        "descriptor": ExtractorDescriptor(
+            name="liteparse",
+            label="LiteParse (LlamaIndex)",
+            description="Local PDFium text + Tesseract OCR (the LlamaParse core). Font-aware headings; the Markdown view is LiteParse's own layout-preserved text, so tables survive as aligned text.",
+            license="Apache-2.0",
+            homepage="https://github.com/run-llama/liteparse",
+        ),
+        "loader": _load_liteparse,
     },
     {
         "descriptor": ExtractorDescriptor(
