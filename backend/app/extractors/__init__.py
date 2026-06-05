@@ -6,6 +6,7 @@ Each engine lives in its own file in this directory. The mapping is 1:1:
     pymupdf                  → pymupdf_extractor.py
     liteparse                → liteparse_extractor.py
     docling                  → docling_extractor.py
+    mineru                   → mineru_extractor.py
     opendataloader           → opendataloader_extractor.py
     opendataloader_hybrid    → opendataloader_hybrid_extractor.py
     vlm                      → vlm_extractor.py
@@ -55,6 +56,11 @@ def _load_liteparse():
 def _load_docling():
     from .docling_extractor import DoclingExtractor
     return DoclingExtractor
+
+
+def _load_mineru():
+    from .mineru_extractor import MinerUExtractor
+    return MinerUExtractor
 
 
 def _load_opendataloader():
@@ -120,6 +126,17 @@ _ENGINES: List[Dict[str, Any]] = [
             homepage="https://github.com/docling-project/docling",
         ),
         "loader": _load_docling,
+    },
+    {
+        "descriptor": ExtractorDescriptor(
+            name="mineru",
+            label="MinerU (ML)",
+            description="OpenDataLab MinerU — ML layout + tables + formulas; strong on complex/CJK pages. Downloads models on first run.",
+            license="MinerU Open Source License (Apache-2.0 based)",
+            requires_bin=["mineru"],
+            homepage="https://github.com/opendatalab/mineru",
+        ),
+        "loader": _load_mineru,
     },
     {
         "descriptor": ExtractorDescriptor(
