@@ -14,3 +14,4 @@ aiofiles>=24.0.0
 litellm>=1.80.0
 opendataloader-pdf[hybrid]>=2.0.0
 liteparse>=2.0.0
+mineru[pipeline]>=2.0.0
